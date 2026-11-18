@@ -1,0 +1,36 @@
+#map {
+  height: 260px;
+  z-index: 1;
+}
+
+.custom-scrollbar::-webkit-scrollbar {
+  height: 4px;
+}
+
+.custom-scrollbar::-webkit-scrollbar-track {
+  background: #f1f5f9;
+}
+
+.custom-scrollbar::-webkit-scrollbar-thumb {
+  background: #cbd5e1;
+  border-radius: 4px;
+}
+
+@keyframes slideDown {
+  from { transform: translateY(-100%); opacity: 0; }
+  to { transform: translateY(0); opacity: 1; }
+}
+
+.toast-anim {
+  animation: slideDown 0.25s ease-out;
+}
+
+.user-location-pulse {
+  width: 14px;
+  height: 14px;
+  background: #0284c7;
+  border: 3px solid #ffffff;
+  border-radius: 50%;
+  box-shadow: 0 0 0 4px rgba(2, 132, 199, 0.4);
+  display: block;
+}
