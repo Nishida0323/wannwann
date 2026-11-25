@@ -1,0 +1,1432 @@
+<!DOCTYPE html>
+<html lang="ja">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <meta name="referrer" content="strict-origin-when-cross-origin">
+  <title>わんラン - 全天候対応ドッグランナビ</title>
+
+  <!-- Tailwind CSS -->
+  <script src="https://cdn.tailwindcss.com"></script>
+
+  <!-- Leaflet.js -->
+  <link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css" />
+  <script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
+
+  <style>
+    /* スマホ時は高さ固定、PC/タブレット(md以上)時は親の高さ100%に追従 */
+    #map { height: 42vh; min-height: 280px; width: 100%; z-index: 1; }
+    @media (min-width: 768px) {
+      #map { height: 100% !important; min-height: 100% !important; }
+    }
+
+    @keyframes slideDown {
+      from { transform: translateY(-100%); opacity: 0; }
+      to { transform: translateY(0); opacity: 1; }
+    }
+    .toast-anim { animation: slideDown 0.2s ease-out; }
+    .user-location-pulse {
+      width: 14px;
+      height: 14px;
+      background: #0284c7;
+      border: 3px solid #ffffff;
+      border-radius: 50%;
+      box-shadow: 0 0 0 4px rgba(2, 132, 199, 0.4);
+      display: block;
+    }
+    /* スクロールバーの細線化 */
+    ::-webkit-scrollbar { width: 5px; height: 5px; }
+    ::-webkit-scrollbar-track { background: #f1f5f9; }
+    ::-webkit-scrollbar-thumb { background: #cbd5e1; border-radius: 4px; }
+    ::-webkit-scrollbar-thumb:hover { background: #94a3b8; }
+    .tag-scroll-hide::-webkit-scrollbar { display: none; }
+    .tag-scroll-hide { -ms-overflow-style: none; scrollbar-width: none; }
+  </style>
+</head>
+<body class="bg-slate-100 text-slate-800 antialiased font-sans flex flex-col min-h-screen md:h-screen overflow-x-hidden md:overflow-hidden">
+
+  <!-- 通知トースト -->
+  <div id="toast-container" class="fixed top-2 inset-x-2 z-50 flex flex-col items-center pointer-events-none gap-1.5"></div>
+
+  <!-- ヘッダー (余白極小) -->
+  <header class="bg-white border-b z-30 flex-shrink-0">
+    <div class="px-3 py-1.5 flex items-center justify-between gap-1.5">
+      <div class="flex items-center space-x-1.5">
+        <span class="text-xl">🐾</span>
+        <div>
+          <h1 class="font-bold text-sm leading-tight text-amber-700">わんラン</h1>
+          <p class="text-[9px] text-slate-500 leading-none">全天候ドッグランナビ</p>
+        </div>
+      </div>
+
+      <div class="flex items-center gap-1.5">
+        <select id="region-selector" onchange="changeRegion(this.value)" class="bg-slate-100 text-[11px] font-bold py-1 px-1.5 rounded border border-slate-300 text-slate-700 focus:outline-none">
+          <option value="130000,35.6812,139.7671">📍 東京</option>
+          <option value="140000,35.4437,139.6380">📍 神奈川</option>
+          <option value="120000,35.6074,140.1065">📍 千葉</option>
+          <option value="110000,35.8617,139.6455">📍 埼玉</option>
+          <option value="270000,34.6937,135.5023">📍 大阪</option>
+          <option value="280000,34.6901,135.1955">📍 兵庫</option>
+          <option value="230000,35.1815,136.9066">📍 愛知</option>
+          <option value="016000,43.0642,141.3469">📍 北海道</option>
+          <option value="400000,33.5904,130.4017">📍 福岡</option>
+        </select>
+
+        <button id="auth-btn" onclick="handleAuthBtnClick()" class="flex items-center gap-0.5 bg-amber-50 hover:bg-amber-100 border border-amber-300 text-amber-800 text-[11px] font-bold py-1 px-2 rounded transition">
+          <span id="auth-btn-icon">👤</span>
+          <span id="auth-btn-text">ログイン</span>
+        </button>
+      </div>
+    </div>
+  </header>
+
+  <!-- 天候・気温シミュレータ設定パネル -->
+  <div class="bg-slate-100 border-b border-slate-200 flex-shrink-0 z-20">
+    <div class="px-3 py-1 flex items-center justify-between text-[11px]">
+      <span class="font-bold text-slate-700">🎛️ 天候・気温シミュレーター</span>
+      <button onclick="toggleCustomWeatherPanel()" id="btn-toggle-custom" class="text-[10px] text-amber-700 font-bold hover:underline">
+        手動変更 ▼
+      </button>
+    </div>
+
+    <div id="custom-weather-panel" class="hidden px-3 pb-2 pt-1 border-t border-slate-200 bg-white text-xs space-y-1.5 shadow-inner">
+      <div class="flex items-center justify-between">
+        <span class="font-medium text-slate-600 text-[11px]">連動モード:</span>
+        <div class="flex gap-1">
+          <button onclick="setWeatherMode('auto')" id="mode-auto" class="px-2.5 py-0.5 rounded font-bold bg-amber-600 text-white text-[10px] transition">気象庁 自動</button>
+          <button onclick="setWeatherMode('custom')" id="mode-custom" class="px-2.5 py-0.5 rounded bg-slate-100 border border-slate-300 text-slate-700 text-[10px] transition">手動</button>
+        </div>
+      </div>
+
+      <div id="custom-controls" class="space-y-1.5 opacity-40 pointer-events-none transition text-[11px]">
+        <div class="flex items-center justify-between">
+          <label class="text-slate-600">天候指定:</label>
+          <div class="flex gap-1.5" id="weather-cond-group">
+            <button onclick="setCustomCondition('clear')" id="btn-cond-clear" class="weather-cond-btn px-2.5 py-0.5 rounded border text-[10px] bg-amber-500 text-white border-amber-600 font-bold transition">☀️ 晴</button>
+            <button onclick="setCustomCondition('rain')" id="btn-cond-rain" class="weather-cond-btn px-2.5 py-0.5 rounded border text-[10px] bg-white border-slate-300 text-slate-700 transition">🌧️ 雨</button>
+            <button onclick="setCustomCondition('cloudy')" id="btn-cond-cloudy" class="weather-cond-btn px-2.5 py-0.5 rounded border text-[10px] bg-white border-slate-300 text-slate-700 transition">☁️ 曇</button>
+          </div>
+        </div>
+
+        <div class="flex items-center justify-between gap-2">
+          <label class="text-slate-600 whitespace-nowrap">気温: <b id="val-temp" class="text-slate-800">22℃</b></label>
+          <input type="range" id="input-temp" min="0" max="40" value="22" oninput="updateCustomValues()" class="w-2/3 accent-amber-600">
+        </div>
+
+        <div class="flex items-center justify-between gap-2">
+          <label class="text-slate-600 whitespace-nowrap">降水: <b id="val-pop" class="text-slate-800">10%</b></label>
+          <input type="range" id="input-pop" min="0" max="100" step="10" value="10" oninput="updateCustomValues()" class="w-2/3 accent-amber-600">
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <!-- 天候・路面温度バナー -->
+  <section id="weather-banner" class="bg-slate-800 text-white px-3 py-1.5 text-xs transition-all flex items-center justify-between flex-shrink-0 z-20">
+    <div class="flex items-center gap-1.5">
+      <span id="weather-icon" class="text-lg">☀️</span>
+      <div>
+        <div class="flex items-center gap-1.5 leading-none">
+          <span id="weather-status" class="font-bold text-xs">晴れ</span>
+          <span id="heat-badge" class="px-1.5 py-0.2 rounded font-bold text-[9px] bg-emerald-600 text-white">安全</span>
+        </div>
+        <span class="text-slate-400 text-[9px] block mt-0.5" id="pavement-status">路面推定: 約34℃</span>
+      </div>
+    </div>
+    <div class="text-right text-[11px] text-slate-200">
+      <span id="banner-temp">22℃</span> / <span id="banner-pop">10%</span>
+    </div>
+  </section>
+
+  <!-- 自動提案バナー -->
+  <section id="proposal-banner" class="px-3 py-1 bg-amber-50 border-b border-amber-200 flex items-center gap-2 text-xs text-amber-900 flex-shrink-0 z-20">
+    <span class="text-base flex-shrink-0" id="proposal-icon">💡</span>
+    <div class="flex-1 min-w-0">
+      <span class="font-bold truncate text-[11px] inline-block max-w-full" id="proposal-title">周辺ドッグランを探索中</span>
+      <span class="text-[10px] text-amber-700 block truncate" id="proposal-desc">条件に合うおすすめ施設</span>
+    </div>
+  </section>
+
+  <!-- メインレイアウトコンテナ：PC・タブレット(md以上)では左右2カラムスプリット、スマホでは縦スクロール配置 -->
+  <div class="flex-1 flex flex-col md:flex-row min-h-0 md:overflow-hidden relative">
+
+    <!-- 左カラム：検索＆施設リスト（スマホ時はそのまま縦に並びスクロール可能、PC時は横幅固定・枠内スクロール） -->
+    <div class="w-full md:w-[390px] lg:w-[440px] flex-shrink-0 flex flex-col bg-white border-r border-slate-300 order-2 md:order-1 h-auto md:h-full md:overflow-hidden">
+      
+      <!-- 検索 & フィルターバー -->
+      <div class="p-2 space-y-1.5 border-b border-slate-200 bg-white flex-shrink-0">
+        <div class="relative flex items-center">
+          <span class="absolute left-2 text-slate-400 text-xs">🔍</span>
+          <input
+            id="search-input"
+            type="text"
+            placeholder="施設名、地名、#タグで検索"
+            oninput="handleSearchInput(this.value)"
+            class="w-full pl-6 pr-6 py-1.5 text-xs bg-slate-100 border border-slate-200 rounded focus:bg-white focus:outline-none focus:ring-1 focus:ring-amber-500"
+          />
+          <button
+            id="clear-search-btn"
+            onclick="clearSearch()"
+            class="absolute right-1.5 text-slate-400 hover:text-slate-600 text-xs hidden p-1"
+          >✕</button>
+        </div>
+
+        <!-- タイプ別タブ切り替え -->
+        <div class="grid grid-cols-4 gap-1 bg-slate-100 p-0.5 rounded">
+          <button onclick="setTypeFilter('all')" id="tab-all" class="py-1 rounded text-[11px] font-bold text-center bg-white text-slate-800 shadow-xs">すべて</button>
+          <button onclick="setTypeFilter('indoor')" id="tab-indoor" class="py-1 rounded text-[11px] font-bold text-center text-slate-600">🏠 室内</button>
+          <button onclick="setTypeFilter('outdoor')" id="tab-outdoor" class="py-1 rounded text-[11px] font-bold text-center text-slate-600">🌳 屋外</button>
+          <button onclick="setTypeFilter('fav')" id="tab-fav" class="py-1 rounded text-[11px] font-bold text-center text-slate-600">❤️ お気に入り</button>
+        </div>
+
+        <!-- 範囲 & 優先度ソート -->
+        <div class="flex items-center justify-between text-[11px] gap-1 pt-0.5">
+          <div class="flex items-center gap-1">
+            <span class="text-slate-500 text-[10px]">範囲:</span>
+            <select id="distance-selector" onchange="setDistanceFilter(this.value)" class="bg-slate-100 border border-slate-300 rounded px-1 py-0.5 text-[10px] text-slate-700">
+              <option value="5">5km</option>
+              <option value="15">15km</option>
+              <option value="30">30km</option>
+              <option value="60" selected>60km(広域)</option>
+              <option value="999">全国</option>
+            </select>
+          </div>
+
+          <div class="flex items-center gap-1">
+            <span class="text-slate-500 text-[10px]">優先:</span>
+            <select id="priority-selector" onchange="setPrioritySort(this.value)" class="bg-amber-50 border border-amber-300 rounded px-1 py-0.5 text-[10px] font-bold text-amber-900">
+              <option value="auto">🌤️ 天候連動</option>
+              <option value="dist">📏 近い順</option>
+              <option value="free">🆓 無料優先</option>
+              <option value="indoor">🏠 室内優先</option>
+              <option value="highway">🚗 高速SA/PA</option>
+            </select>
+          </div>
+        </div>
+
+        <!-- タグ一覧エリア -->
+        <div class="pt-1 border-t border-slate-100">
+          <div class="flex items-center justify-between mb-1">
+            <span class="text-[10px] font-bold text-slate-600 flex items-center gap-1">
+              <span>🏷️</span> 人気のタグ
+            </span>
+            <button onclick="openAllTagsModal()" class="text-[10px] text-amber-700 hover:text-amber-800 font-bold hover:underline">
+              タグ一覧 全件 ›
+            </button>
+          </div>
+          <div id="quick-tags-container" class="flex gap-1 overflow-x-auto tag-scroll-hide py-0.5"></div>
+        </div>
+
+      </div>
+
+      <!-- リストヘッダー -->
+      <div class="flex items-center justify-between px-3 py-1.5 bg-slate-100 text-xs text-slate-500 border-b border-slate-200 flex-shrink-0">
+        <div class="flex items-center gap-1">
+          <span class="font-bold text-slate-700 text-[11px]">施設一覧</span>
+          <span id="data-source-badge" class="bg-white border text-slate-600 px-1 py-0.2 rounded text-[9px]">即時表示</span>
+        </div>
+        <div class="flex items-center gap-1.5">
+          <span id="result-count" class="font-bold text-amber-700 text-xs">0件</span>
+          <button onclick="openAddModal()" class="text-[10px] font-bold text-amber-800 bg-amber-100 hover:bg-amber-200 px-2 py-0.5 rounded transition">
+            ＋ 登録
+          </button>
+        </div>
+      </div>
+
+      <!-- ローディングスピナー -->
+      <div id="loading-spinner" class="py-2 text-center hidden bg-white border-b flex-shrink-0">
+        <div class="inline-block w-3.5 h-3.5 border-2 border-amber-500 border-t-transparent rounded-full animate-spin"></div>
+        <span class="text-[10px] text-slate-400 ml-1.5">データ取得中...</span>
+      </div>
+
+      <!-- ドッグラン リスト表示部 -->
+      <main class="flex-1 md:overflow-y-auto">
+        <div id="facility-list" class="divide-y divide-slate-200 bg-white"></div>
+      </main>
+    </div>
+
+    <!-- 右カラム：地図エリア -->
+    <div class="flex-1 relative order-1 md:order-2 h-[42vh] md:h-full bg-slate-200 flex-shrink-0">
+      <div id="map"></div>
+
+      <button onclick="refreshFacilities(currentLat, currentLng)" class="absolute top-3 left-3 z-[400] bg-white/95 px-2.5 py-1.5 rounded-md shadow-md border border-slate-200 text-[11px] font-bold text-slate-700 hover:bg-slate-100 flex items-center gap-1 active:scale-95 transition">
+        🔄 <span>再取得</span>
+      </button>
+
+      <button id="btn-gps" onclick="getUserLocation()" class="absolute bottom-3 right-3 z-[400] bg-white px-3 py-1.5 rounded-full shadow-lg border border-slate-200 hover:bg-slate-50 active:scale-95 transition flex items-center gap-1.5">
+        <span id="gps-icon" class="text-xs">📍</span>
+        <span id="gps-text" class="text-[11px] font-bold text-slate-700">現在地</span>
+      </button>
+    </div>
+
+  </div>
+
+  <!-- タグ全件一覧モーダル -->
+  <div id="all-tags-modal" class="fixed inset-0 bg-black/60 z-50 flex items-end sm:items-center justify-center hidden p-0 sm:p-2 backdrop-blur-xs">
+    <div class="bg-white w-full max-w-md rounded-t-xl sm:rounded-xl max-h-[85vh] flex flex-col p-3.5 shadow-2xl">
+      <div class="flex justify-between items-center border-b pb-2 flex-shrink-0">
+        <div>
+          <h2 class="text-sm font-bold text-slate-900 flex items-center gap-1">
+            <span>🏷️</span> 登録タグ一覧
+          </h2>
+          <p class="text-[10px] text-slate-500">タグをタップすると施設を絞り込めます</p>
+        </div>
+        <button onclick="closeAllTagsModal()" class="text-slate-400 hover:text-slate-600 text-2xl p-1 leading-none">&times;</button>
+      </div>
+
+      <div class="py-2 flex-shrink-0">
+        <input 
+          type="text" 
+          id="tag-search-filter" 
+          placeholder="タグを検索..." 
+          oninput="renderAllTagsModalList(this.value)"
+          class="w-full text-xs px-2.5 py-1.5 bg-slate-100 border border-slate-200 rounded focus:bg-white focus:outline-none focus:ring-1 focus:ring-amber-500"
+        />
+      </div>
+
+      <div id="all-tags-list" class="flex-1 overflow-y-auto flex flex-wrap gap-1.5 py-1"></div>
+
+      <div class="pt-2 border-t flex justify-between items-center text-xs flex-shrink-0">
+        <span id="total-tags-count" class="text-slate-500 text-[11px]">全0件のタグ</span>
+        <button onclick="closeAllTagsModal()" class="px-3 py-1 bg-slate-200 text-slate-700 font-bold rounded hover:bg-slate-300">閉じる</button>
+      </div>
+    </div>
+  </div>
+
+  <!-- 詳細モーダル -->
+  <div id="detail-modal" class="fixed inset-0 bg-black/60 z-50 flex items-end sm:items-center justify-center hidden p-0 sm:p-2 backdrop-blur-xs">
+    <div class="bg-white w-full max-w-lg rounded-t-xl sm:rounded-xl max-h-[92vh] overflow-y-auto p-3.5 space-y-2.5 shadow-2xl">
+      <div class="flex justify-between items-start gap-2">
+        <div class="flex-1">
+          <span id="m-type" class="text-[10px] font-bold text-amber-700 bg-amber-50 px-1.5 py-0.2 rounded inline-block mb-0.5">ドッグラン</span>
+          <h2 id="m-name" class="text-base font-bold text-slate-900 leading-tight">施設名</h2>
+        </div>
+        <div class="flex items-center gap-1">
+          <button id="m-fav-btn" onclick="toggleModalFav()" class="text-2xl p-1 rounded hover:bg-slate-100 leading-none">🤍</button>
+          <button onclick="closeModal()" class="text-slate-400 hover:text-slate-600 text-3xl font-light leading-none p-1">&times;</button>
+        </div>
+      </div>
+
+      <div class="bg-amber-50/70 p-2.5 rounded-lg border border-amber-200 space-y-1.5">
+        <div class="flex items-center justify-between text-[11px]">
+          <span class="font-bold text-slate-700">🏷️ タグ</span>
+        </div>
+        <div id="m-tags" class="flex flex-wrap gap-1"></div>
+        <div class="flex items-center gap-1 pt-0.5">
+          <input type="text" id="input-new-tag" placeholder="新しいタグ" class="flex-1 text-xs px-2 py-1 bg-white border border-slate-300 rounded">
+          <button onclick="addTagToCurrentFacility()" class="bg-amber-600 text-white font-bold text-xs px-2.5 py-1 rounded">＋ 追加</button>
+        </div>
+      </div>
+
+      <div class="bg-slate-50 p-2.5 rounded-lg text-xs space-y-1 border border-slate-200">
+        <div class="flex justify-between gap-2"><span class="text-slate-500">📍 住所</span><span id="m-address" class="font-medium text-right">-</span></div>
+        <div class="flex justify-between gap-2"><span class="text-slate-500">📏 距離</span><span id="m-distance" class="font-bold text-amber-700">-</span></div>
+        <div class="flex justify-between gap-2"><span class="text-slate-500">⏰ 時間</span><span id="m-hours" class="font-medium">-</span></div>
+        <div class="flex justify-between gap-2"><span class="text-slate-500">💰 料金</span><span id="m-fee" class="font-bold text-emerald-700">-</span></div>
+      </div>
+
+      <a id="m-nav-btn" href="#" target="_blank" class="w-full py-2.5 bg-slate-800 text-white rounded-lg font-bold text-xs hover:bg-slate-900 transition flex items-center justify-center gap-1">
+        🗺️ Googleマップでルート案内を開く
+      </a>
+    </div>
+  </div>
+
+  <!-- 新規施設追加モーダル -->
+  <div id="add-modal" class="fixed inset-0 bg-black/60 z-50 flex items-end sm:items-center justify-center hidden p-0 sm:p-2 backdrop-blur-xs">
+    <div class="bg-white w-full max-w-lg rounded-t-xl sm:rounded-xl max-h-[92vh] overflow-y-auto p-3.5 space-y-2 shadow-2xl">
+      <div class="flex justify-between items-center pb-1 border-b">
+        <h2 class="text-sm font-bold text-slate-900">＋ ドッグラン追加</h2>
+        <button onclick="closeAddModal()" class="text-slate-400 hover:text-slate-600 text-2xl p-1 leading-none">&times;</button>
+      </div>
+
+      <div class="text-xs space-y-2">
+        <div>
+          <label class="block text-slate-600 font-bold mb-0.5">施設名 *</label>
+          <input type="text" id="add-name" class="w-full p-1.5 border rounded">
+        </div>
+        <div class="grid grid-cols-2 gap-2">
+          <div>
+            <label class="block text-slate-600 font-bold mb-0.5">種別 *</label>
+            <select id="add-type" class="w-full p-1.5 border rounded bg-white">
+              <option value="outdoor">🌳 屋外</option>
+              <option value="indoor">🏠 室内</option>
+            </select>
+          </div>
+          <div>
+            <label class="block text-slate-600 font-bold mb-0.5">料金</label>
+            <select id="add-free" class="w-full p-1.5 border rounded bg-white">
+              <option value="true">無料</option>
+              <option value="false">有料</option>
+            </select>
+          </div>
+        </div>
+        <div>
+          <label class="block text-slate-600 font-bold mb-0.5">住所</label>
+          <input type="text" id="add-address" class="w-full p-1.5 border rounded">
+        </div>
+        <div class="grid grid-cols-2 gap-2">
+          <div>
+            <label class="block text-slate-600 font-bold mb-0.5">営業時間</label>
+            <input type="text" id="add-hours" placeholder="例: 09:00 - 18:00" class="w-full p-1.5 border rounded">
+          </div>
+          <div>
+            <label class="block text-slate-600 font-bold mb-0.5">料金詳細</label>
+            <input type="text" id="add-fee" placeholder="例: ¥1,000" class="w-full p-1.5 border rounded">
+          </div>
+        </div>
+        <div>
+          <label class="block text-slate-600 font-bold mb-0.5">タグ（カンマ区切り）</label>
+          <input type="text" id="add-tags" placeholder="室内, 天然芝, 大型犬OK" class="w-full p-1.5 border rounded">
+        </div>
+      </div>
+
+      <button onclick="submitNewFacility()" class="w-full py-2 bg-amber-600 hover:bg-amber-700 text-white font-bold rounded text-xs transition">
+        保存する
+      </button>
+    </div>
+  </div>
+
+  <!-- ログイン / 新規登録モーダル -->
+  <div id="auth-modal" class="fixed inset-0 bg-black/60 z-50 flex items-end sm:items-center justify-center hidden p-0 sm:p-2 backdrop-blur-xs">
+    <div class="bg-white w-full max-w-sm rounded-t-xl sm:rounded-xl p-3.5 space-y-2.5 shadow-2xl">
+      <div class="flex justify-between items-center pb-1">
+        <h2 id="auth-modal-title" class="text-sm font-bold text-slate-900">ログイン</h2>
+        <button onclick="closeAuthModal()" class="text-slate-400 hover:text-slate-600 text-2xl p-1 leading-none">&times;</button>
+      </div>
+
+      <div class="flex border-b text-xs">
+        <button onclick="setAuthTab('login')" id="tab-auth-login" class="flex-1 py-1 font-bold text-amber-700 border-b-2 border-amber-600">ログイン</button>
+        <button onclick="setAuthTab('register')" id="tab-auth-register" class="flex-1 py-1 font-bold text-slate-400">新規登録</button>
+      </div>
+
+      <div class="text-xs space-y-2">
+        <div>
+          <label class="block text-slate-600 font-medium mb-0.5">メールアドレス</label>
+          <input type="email" id="auth-email" placeholder="example@email.com" class="w-full p-1.5 border rounded">
+        </div>
+        <div>
+          <label class="block text-slate-600 font-medium mb-0.5">パスワード</label>
+          <input type="password" id="auth-password" placeholder="4文字以上" class="w-full p-1.5 border rounded">
+        </div>
+
+        <div id="reg-fields" class="space-y-2 hidden pt-1 border-t">
+          <div>
+            <label class="block text-slate-600 font-medium mb-0.5">飼い主ニックネーム</label>
+            <input type="text" id="reg-owner-name" placeholder="ポチパパ" class="w-full p-1.5 border rounded">
+          </div>
+          <div class="grid grid-cols-2 gap-2">
+            <div>
+              <label class="block text-slate-600 font-medium mb-0.5">愛犬の名前</label>
+              <input type="text" id="reg-dog-name" placeholder="ポチ" class="w-full p-1.5 border rounded">
+            </div>
+            <div>
+              <label class="block text-slate-600 font-medium mb-0.5">犬種</label>
+              <input type="text" id="reg-dog-breed" placeholder="トイプードル" class="w-full p-1.5 border rounded">
+            </div>
+          </div>
+          <div>
+            <label class="block text-slate-600 font-medium mb-0.5">愛犬のサイズ</label>
+            <select id="reg-dog-size" class="w-full p-1.5 border rounded bg-white">
+              <option value="小型犬 (〜10kg)">小型犬 (〜10kg)</option>
+              <option value="中型犬 (10〜25kg)">中型犬 (10〜25kg)</option>
+              <option value="大型犬 (25kg〜)">大型犬 (25kg〜)</option>
+            </select>
+          </div>
+        </div>
+      </div>
+
+      <button id="auth-submit-btn" onclick="submitAuthForm()" class="w-full py-2 bg-amber-600 hover:bg-amber-700 text-white font-bold rounded text-xs transition">
+        ログインする
+      </button>
+    </div>
+  </div>
+
+  <!-- プロフィールモーダル -->
+  <div id="profile-modal" class="fixed inset-0 bg-black/60 z-50 flex items-end sm:items-center justify-center hidden p-0 sm:p-2 backdrop-blur-xs">
+    <div class="bg-white w-full max-w-sm rounded-t-xl sm:rounded-xl p-3.5 space-y-2.5 shadow-2xl">
+      <div class="flex justify-between items-center border-b pb-1.5">
+        <h2 class="text-sm font-bold text-slate-900 flex items-center gap-1">
+          <span>🐶</span> <span>マイページ</span>
+        </h2>
+        <button onclick="closeProfileModal()" class="text-slate-400 hover:text-slate-600 text-2xl p-1 leading-none">&times;</button>
+      </div>
+
+      <div class="space-y-2 text-xs">
+        <div class="bg-amber-50 p-2.5 rounded-lg border border-amber-200 flex items-center gap-2.5">
+          <div class="w-10 h-10 rounded-full bg-amber-200 flex items-center justify-center text-xl flex-shrink-0">
+            🐕
+          </div>
+          <div class="flex-1">
+            <div class="font-bold text-slate-900" id="prof-dog-name">ポチ</div>
+            <div class="text-[10px] text-amber-800" id="prof-dog-info">トイプードル / 小型犬</div>
+          </div>
+        </div>
+
+        <div class="bg-slate-50 p-2 rounded-lg border text-[11px] space-y-1">
+          <div class="flex justify-between"><span class="text-slate-500">飼い主名</span><span class="font-bold text-slate-800" id="prof-owner-name">-</span></div>
+          <div class="flex justify-between"><span class="text-slate-500">登録メール</span><span class="text-slate-700" id="prof-email">-</span></div>
+          <div class="flex justify-between border-t pt-1"><span class="text-slate-500">❤️ お気に入り登録数</span><span class="font-bold text-rose-600" id="prof-fav-count">0 件</span></div>
+        </div>
+
+        <div class="space-y-1 pt-1">
+          <button onclick="openEditProfile()" class="w-full py-1.5 bg-slate-100 hover:bg-slate-200 text-slate-700 font-bold rounded text-xs">✏️ 愛犬の名前変更</button>
+          <button onclick="logoutUser()" class="w-full py-1.5 bg-rose-50 hover:bg-rose-100 text-rose-700 font-bold rounded text-xs">🚪 ログアウト</button>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <script>
+    let map;
+    let markersLayer = L.layerGroup();
+    let userLocationLayer = L.layerGroup();
+    let currentLat = 35.6812;
+    let currentLng = 139.7671;
+    let currentAreaCode = "130000";
+
+    let allFacilities = [];
+    let maxDistanceKm = 60;
+    let currentPriority = "auto";
+    let searchQuery = "";
+    let activeTag = null;
+    let currentTypeFilter = "all";
+    let currentModalFacilityId = null;
+
+    let authMode = "login";
+    let currentUser = null;
+
+    let weatherMode = "auto";
+    let currentWeather = { condition: "clear", temp: 22, pop: 10, text: "晴れ" };
+
+    const builtinDogParks = [
+      { id: "tk-01", name: "代々木公園 ドッグラン", lat: 35.6710, lng: 139.6950, isIndoor: false, isFree: true, isHighway: false, hours: "日の出 - 日没", fee: "無料 (要登録)", address: "東京都渋谷区代々木神園町2-1", tags: ["無料", "都心", "木陰あり", "大型犬OK"] },
+      { id: "tk-02", name: "愛犬ヴィレッジ 新宿店", lat: 35.6980, lng: 139.7090, isIndoor: true, isFree: false, isHighway: false, hours: "11:00 - 20:00", fee: "1時間 ¥1,200", address: "東京都新宿区大久保1-10-10", tags: ["室内", "クッション床", "カフェ併設", "雨の日安心", "冷暖房完備"] },
+      { id: "tk-03", name: "駒沢オリンピック公園 ドッグラン", lat: 35.6263, lng: 139.6602, isIndoor: false, isFree: true, isHighway: false, hours: "24時間開放", fee: "無料 (登録制)", address: "東京都世田谷区駒沢公園1-1", tags: ["無料", "硬質砂", "ナイター照明", "大型犬OK"] },
+      { id: "tk-04", name: "ILIO 有明ガーデン店", lat: 35.6375, lng: 139.7915, isIndoor: true, isFree: false, isHighway: false, hours: "10:00 - 20:00", fee: "1時間 ¥1,100", address: "東京都江東区有明2-1-8 有明ガーデン1F", tags: ["室内", "人工芝", "商業施設", "冷暖房完備", "駐車場あり"] },
+      { id: "tk-05", name: "ドッグタウン小豆沢", lat: 35.7765, lng: 139.6980, isIndoor: true, isFree: false, isHighway: false, hours: "10:00 - 19:00", fee: "1時間 ¥1,320", address: "東京都板橋区小豆沢2-35-8", tags: ["室内", "広々屋内", "冷暖房完備"] },
+      { id: "kn-01", name: "WANCOTT 横浜", lat: 35.4410, lng: 139.6450, isIndoor: true, isFree: false, isHighway: false, hours: "10:00 - 19:00", fee: "1時間 ¥1,650", address: "神奈川県横浜市中区山下町168-1 レイトンハウス3F", tags: ["国内最大級室内", "大型犬OK", "トレーナー常駐", "冷暖房完備"] },
+      { id: "kn-02", name: "新横浜公園 ドッグラン", lat: 35.5100, lng: 139.6050, isIndoor: false, isFree: false, isHighway: false, hours: "09:30 - 17:00", fee: "1頭 ¥500", address: "神奈川県横浜市港北区小机町3300", tags: ["天然芝", "広大", "アジリティ", "駐車場あり"] },
+      { id: "kn-03", name: "東名 EXPASA海老名(下り)", lat: 35.4347, lng: 139.3942, isIndoor: false, isFree: true, isHighway: true, hours: "24時間開放", fee: "完全無料", address: "神奈川県海老名市大谷南5-2-1", tags: ["無料", "高速SA", "水飲み場あり"] },
+      { id: "kn-04", name: "DOG CAMPUS 元町店", lat: 35.4385, lng: 139.6480, isIndoor: true, isFree: false, isHighway: false, hours: "11:00 - 19:00", fee: "1時間 ¥1,100", address: "神奈川県横浜市中区元町2-90", tags: ["室内", "カフェ併設", "雨の日安心"] },
+      { id: "cb-01", name: "カインズ幕張店 ドッグラン", lat: 35.6560, lng: 140.0210, isIndoor: false, isFree: true, isHighway: false, hours: "09:00 - 20:00", fee: "無料 (会員制)", address: "千葉県習志野市芝園1-2-1", tags: ["無料", "買い物ついで", "駐車場あり"] },
+      { id: "cb-02", name: "イオンモール幕張新都心 PECCOS", lat: 35.6548, lng: 140.0175, isIndoor: true, isFree: false, isHighway: false, hours: "10:00 - 20:00", fee: "1時間 ¥1,100", address: "千葉県千葉市美浜区豊砂1-8 ペットモール2F", tags: ["室内", "雨の日安心", "冷暖房完備", "商業施設", "駐車場あり"] },
+      { id: "st-01", name: "DOGRUN + CAFE FETCH!", lat: 35.9120, lng: 139.4620, isIndoor: true, isFree: false, isHighway: false, hours: "10:00 - 18:00", fee: "1頭 ¥1,100", address: "埼玉県川越市鹿飼1629", tags: ["室内併設", "天然芝", "プール", "カフェ併設", "駐車場あり"] },
+      { id: "st-02", name: "道満ドッグラン (彩湖)", lat: 35.8190, lng: 139.6240, isIndoor: false, isFree: false, isHighway: false, hours: "10:00 - 17:00", fee: "1頭 ¥550", address: "埼玉県戸田市大字重瀬745", tags: ["天然芝", "大型犬OK", "広大", "駐車場あり"] },
+      { id: "os-01", name: "GRASS DOG & CAT うめきた", lat: 34.7042, lng: 135.4950, isIndoor: true, isFree: false, isHighway: false, hours: "10:00 - 20:00", fee: "1時間 ¥1,100", address: "大阪府大阪市北区大深町", tags: ["室内", "駅近", "冷暖房完備"] },
+      { id: "os-02", name: "鶴見緑地 ドッグラン", lat: 34.7110, lng: 135.5780, isIndoor: false, isFree: true, isHighway: false, hours: "09:00 - 17:30", fee: "完全無料", address: "大阪府大阪市鶴見区緑地公園2-163", tags: ["無料", "緑豊か", "広大", "大型犬OK"] },
+      { id: "os-03", name: "みのおキューズモール 室内ドッグラン", lat: 34.8320, lng: 135.4910, isIndoor: true, isFree: false, isHighway: false, hours: "10:00 - 19:00", fee: "1時間 ¥880", address: "大阪府箕面市西宿1-17-22", tags: ["室内", "雨の日安心", "商業施設", "駐車場あり"] },
+      { id: "hy-01", name: "神戸六甲アイランド ドッグラン", lat: 34.6901, lng: 135.2710, isIndoor: false, isFree: false, isHighway: false, hours: "09:00 - 18:00", fee: "1頭 ¥800", address: "兵庫県神戸市東灘区向洋町中", tags: ["海沿い", "天然芝", "広大"] },
+      { id: "hy-02", name: "BARK DOLL 神戸 (全天候)", lat: 34.6850, lng: 135.1850, isIndoor: true, isFree: false, isHighway: false, hours: "11:00 - 19:00", fee: "1時間 ¥1,000", address: "兵庫県神戸市中央区海岸通", tags: ["室内", "雨の日安心", "カフェ併設"] },
+      { id: "ac-01", name: "名城公園 ドッグラン", lat: 35.1895, lng: 136.9030, isIndoor: false, isFree: true, isHighway: false, hours: "日の出 - 日没", fee: "無料", address: "愛知県名古屋市北区名城1丁目", tags: ["無料", "公園直結", "アクセス良"] },
+      { id: "ac-02", name: "ディスワン八事店 室内ドッグラン", lat: 35.1390, lng: 136.9630, isIndoor: true, isFree: false, isHighway: false, hours: "10:00 - 19:00", fee: "1時間 ¥770", address: "愛知県名古屋市昭和区広路町石坂", tags: ["室内", "冷暖房完備", "雨の日安心", "駐車場あり"] },
+      { id: "hk-01", name: "札幌ドッグランド (広大天然芝)", lat: 43.0230, lng: 141.3850, isIndoor: false, isFree: false, isHighway: false, hours: "09:00 - 17:00", fee: "1頭 ¥1,000", address: "北海道札幌市南区真駒内", tags: ["広大", "天然芝", "大型犬OK", "雪遊び"] },
+      { id: "hk-02", name: "バークマンサッポロ (室内)", lat: 43.0850, lng: 141.3320, isIndoor: true, isFree: false, isHighway: false, hours: "10:00 - 19:00", fee: "1時間 ¥1,200", address: "北海道札幌市北区新川", tags: ["室内", "全天候", "雪・雨対応", "冷暖房完備"] },
+      { id: "fk-01", name: "大濠公園周辺 DOG WAN", lat: 33.5860, lng: 130.3780, isIndoor: true, isFree: false, isHighway: false, hours: "10:00 - 19:00", fee: "1時間 ¥1,000", address: "福岡県福岡市中央区大濠", tags: ["室内", "カフェ併設", "駅近"] },
+      { id: "fk-02", name: "海の中道海浜公園 ドッグラン", lat: 33.6590, lng: 130.3580, isIndoor: false, isFree: false, isHighway: false, hours: "09:30 - 17:30", fee: "入園料のみ", address: "福岡県福岡市東区西戸崎18-25", tags: ["国営公園", "広大", "海が見える", "大型犬OK"] }
+    ];
+
+    function calcDistance(lat1, lon1, lat2, lon2) {
+      const R = 6371;
+      const dLat = (lat2 - lat1) * Math.PI / 180;
+      const dLon = (lon2 - lon1) * Math.PI / 180;
+      const a = Math.sin(dLat/2) * Math.sin(dLat/2) +
+                Math.cos(lat1 * Math.PI / 180) * Math.cos(lat2 * Math.PI / 180) *
+                Math.sin(dLon/2) * Math.sin(dLon/2);
+      return Math.round(R * 2 * Math.atan2(Math.sqrt(a), Math.sqrt(1-a)) * 10) / 10;
+    }
+
+    window.addEventListener("DOMContentLoaded", () => {
+      initMap();
+      loadCustomFacilitiesAndTags();
+      checkAuthSession();
+      renderTagPills();
+      applyFiltersAndRender();
+      fetchWeatherData(currentAreaCode);
+      fetchOnlineFacilities(currentLat, currentLng);
+
+      window.addEventListener('resize', () => {
+        if (map) map.invalidateSize();
+      });
+    });
+
+    function initMap() {
+      map = L.map('map', { zoomControl: false }).setView([currentLat, currentLng], 12);
+      L.control.zoom({ position: 'topright' }).addTo(map);
+
+      L.tileLayer('https://tile.openstreetmap.jp/{z}/{x}/{y}.png', {
+        attribution: '&copy; OpenStreetMap contributors',
+        maxZoom: 18
+      }).addTo(map);
+
+      markersLayer.addTo(map);
+      userLocationLayer.addTo(map);
+      updateUserLocationMarker(currentLat, currentLng);
+      setTimeout(() => map.invalidateSize(), 300);
+    }
+
+    function updateUserLocationMarker(lat, lng) {
+      userLocationLayer.clearLayers();
+      const pulseIcon = L.divIcon({
+        className: 'user-location-pulse',
+        iconSize: [14, 14],
+        iconAnchor: [7, 7]
+      });
+      L.marker([lat, lng], { icon: pulseIcon }).addTo(userLocationLayer)
+        .bindPopup("<b style='font-size:11px;'>現在地</b>");
+    }
+
+    function loadCustomFacilitiesAndTags() {
+      const savedCustom = JSON.parse(localStorage.getItem('wanlan_custom_facilities') || '[]');
+      const savedTagsMap = JSON.parse(localStorage.getItem('wanlan_facility_tags') || '{}');
+
+      let merged = [...builtinDogParks, ...savedCustom];
+      merged = merged.map(f => {
+        if (savedTagsMap[f.id]) {
+          const combined = Array.from(new Set([...(f.tags || []), ...savedTagsMap[f.id]]));
+          return { ...f, tags: combined };
+        }
+        return { ...f, tags: f.tags || [] };
+      });
+      allFacilities = merged;
+    }
+
+    function getTagCounts() {
+      const counts = {};
+      allFacilities.forEach(f => {
+        (f.tags || []).forEach(t => {
+          const tag = t.trim();
+          if (!tag) return;
+          counts[tag] = (counts[tag] || 0) + 1;
+        });
+      });
+      return Object.entries(counts).sort((a, b) => b[1] - a[1]);
+    }
+
+    function renderTagPills() {
+      const container = document.getElementById("quick-tags-container");
+      if (!container) return;
+      const sortedTags = getTagCounts();
+
+      let html = `
+        <button onclick="toggleTagFilter(null)" class="flex-shrink-0 text-[10px] px-2 py-0.5 rounded-full border transition ${!activeTag ? 'bg-amber-600 border-amber-600 text-white font-bold' : 'bg-slate-50 border-slate-200 text-slate-600 hover:bg-slate-100'}">
+          すべて
+        </button>
+      `;
+
+      sortedTags.slice(0, 10).forEach(([tag, count]) => {
+        const isSelected = activeTag === tag;
+        html += `
+          <button onclick="toggleTagFilter('${tag}')" class="flex-shrink-0 text-[10px] px-2 py-0.5 rounded-full border transition flex items-center gap-1 ${isSelected ? 'bg-amber-600 border-amber-600 text-white font-bold shadow-xs' : 'bg-white border-slate-300 text-slate-700 hover:border-amber-500'}">
+            <span>#${tag}</span>
+            <span class="text-[9px] ${isSelected ? 'text-amber-100' : 'text-slate-400'}">(${count})</span>
+          </button>
+        `;
+      });
+
+      container.innerHTML = html;
+    }
+
+    function toggleTagFilter(tag) {
+      if (activeTag === tag || tag === null) {
+        activeTag = null;
+        if (searchQuery.startsWith("#")) {
+          searchQuery = "";
+          document.getElementById("search-input").value = "";
+          document.getElementById("clear-search-btn").classList.add("hidden");
+        }
+      } else {
+        activeTag = tag;
+        searchQuery = `#${tag}`;
+        document.getElementById("search-input").value = `#${tag}`;
+        document.getElementById("clear-search-btn").classList.remove("hidden");
+        showToast(`🏷️ 「#${tag}」で絞り込みました`);
+      }
+      renderTagPills();
+      applyFiltersAndRender();
+    }
+
+    function openAllTagsModal() {
+      document.getElementById("all-tags-modal").classList.remove("hidden");
+      document.getElementById("tag-search-filter").value = "";
+      renderAllTagsModalList();
+    }
+
+    function closeAllTagsModal() {
+      document.getElementById("all-tags-modal").classList.add("hidden");
+    }
+
+    function renderAllTagsModalList(filterText = "") {
+      const container = document.getElementById("all-tags-list");
+      const countLabel = document.getElementById("total-tags-count");
+      const sorted = getTagCounts();
+      const query = filterText.toLowerCase().trim();
+
+      const filtered = sorted.filter(([t]) => t.toLowerCase().includes(query));
+      countLabel.textContent = `全 ${sorted.length} 種類のタグ (${filtered.length} 件表示)`;
+
+      if (filtered.length === 0) {
+        container.innerHTML = `<div class="w-full text-center py-6 text-xs text-slate-400">一致するタグがありません</div>`;
+        return;
+      }
+
+      container.innerHTML = filtered.map(([tag, count]) => {
+        const isSelected = activeTag === tag;
+        return `
+          <button onclick="selectTagFromModal('${tag}')" class="text-xs px-2.5 py-1 rounded-lg border transition flex items-center gap-1.5 ${isSelected ? 'bg-amber-600 border-amber-600 text-white font-bold' : 'bg-slate-50 border-slate-200 text-slate-700 hover:bg-amber-50 hover:border-amber-400'}">
+            <span>#${tag}</span>
+            <span class="text-[10px] px-1.5 py-0.2 rounded-full ${isSelected ? 'bg-amber-700 text-white' : 'bg-slate-200 text-slate-600'}">${count}</span>
+          </button>
+        `;
+      }).join('');
+    }
+
+    function selectTagFromModal(tag) {
+      closeAllTagsModal();
+      toggleTagFilter(tag);
+    }
+
+    function checkAuthSession() {
+      const session = localStorage.getItem('wanlan_current_user');
+      if (session) {
+        currentUser = JSON.parse(session);
+        currentUser.favorites = currentUser.favorites || [];
+        updateAuthUI(true);
+      } else {
+        currentUser = null;
+        updateAuthUI(false);
+      }
+    }
+
+    function updateAuthUI(isLoggedIn) {
+      const icon = document.getElementById("auth-btn-icon");
+      const text = document.getElementById("auth-btn-text");
+      const btn = document.getElementById("auth-btn");
+
+      if (isLoggedIn && currentUser) {
+        icon.textContent = "🐶";
+        text.textContent = currentUser.dogName || "マイページ";
+        btn.className = "flex items-center gap-0.5 bg-emerald-50 hover:bg-emerald-100 border border-emerald-300 text-emerald-800 text-[11px] font-bold py-1 px-2 rounded transition";
+      } else {
+        icon.textContent = "👤";
+        text.textContent = "ログイン";
+        btn.className = "flex items-center gap-0.5 bg-amber-50 hover:bg-amber-100 border border-amber-300 text-amber-800 text-[11px] font-bold py-1 px-2 rounded transition";
+      }
+    }
+
+    function handleAuthBtnClick() {
+      if (currentUser) openProfileModal();
+      else openAuthModal();
+    }
+
+    function openAuthModal() {
+      setAuthTab('login');
+      document.getElementById("auth-modal").classList.remove("hidden");
+    }
+
+    function closeAuthModal() {
+      document.getElementById("auth-modal").classList.add("hidden");
+    }
+
+    function setAuthTab(mode) {
+      authMode = mode;
+      const tabLogin = document.getElementById("tab-auth-login");
+      const tabReg = document.getElementById("tab-auth-register");
+      const regFields = document.getElementById("reg-fields");
+      const submitBtn = document.getElementById("auth-submit-btn");
+      const title = document.getElementById("auth-modal-title");
+
+      if (mode === 'login') {
+        tabLogin.className = "flex-1 py-1 font-bold text-amber-700 border-b-2 border-amber-600";
+        tabReg.className = "flex-1 py-1 font-bold text-slate-400";
+        regFields.classList.add("hidden");
+        submitBtn.textContent = "ログインする";
+        title.textContent = "ログイン";
+      } else {
+        tabReg.className = "flex-1 py-1 font-bold text-amber-700 border-b-2 border-amber-600";
+        tabLogin.className = "flex-1 py-1 font-bold text-slate-400";
+        regFields.classList.remove("hidden");
+        submitBtn.textContent = "新規会員登録する";
+        title.textContent = "新規会員登録";
+      }
+    }
+
+    function submitAuthForm() {
+      const email = document.getElementById("auth-email").value.trim().toLowerCase();
+      const password = document.getElementById("auth-password").value.trim();
+
+      if (!email || !password) {
+        alert("メールアドレスとパスワードを入力してください");
+        return;
+      }
+      if (password.length < 4) {
+        alert("パスワードは4文字以上で入力してください");
+        return;
+      }
+
+      const users = JSON.parse(localStorage.getItem('wanlan_users') || '[]');
+
+      if (authMode === 'register') {
+        if (users.some(u => u.email === email)) {
+          alert("このメールアドレスは既に登録されています");
+          return;
+        }
+
+        const ownerName = document.getElementById("reg-owner-name").value.trim() || "オーナー";
+        const dogName = document.getElementById("reg-dog-name").value.trim() || "愛犬";
+        const dogBreed = document.getElementById("reg-dog-breed").value.trim() || "MIX";
+        const dogSize = document.getElementById("reg-dog-size").value;
+
+        const newUser = {
+          email, password, ownerName, dogName, dogBreed, dogSize,
+          favorites: [], registeredAt: new Date().toISOString()
+        };
+
+        users.push(newUser);
+        localStorage.setItem('wanlan_users', JSON.stringify(users));
+        localStorage.setItem('wanlan_current_user', JSON.stringify(newUser));
+
+        currentUser = newUser;
+        updateAuthUI(true);
+        closeAuthModal();
+        applyFiltersAndRender();
+        showToast(`🎉 ようこそ、${dogName}ちゃん！`);
+      } else {
+        const matched = users.find(u => u.email === email && u.password === password);
+        if (!matched) {
+          alert("メールアドレスまたはパスワードが正しくありません");
+          return;
+        }
+
+        matched.favorites = matched.favorites || [];
+        localStorage.setItem('wanlan_current_user', JSON.stringify(matched));
+        currentUser = matched;
+        updateAuthUI(true);
+        closeAuthModal();
+        applyFiltersAndRender();
+        showToast(`🐾 おかえりなさい、${currentUser.dogName || 'オーナー'}さん！`);
+      }
+    }
+
+    function openProfileModal() {
+      if (!currentUser) return;
+      document.getElementById("prof-dog-name").textContent = currentUser.dogName || "愛犬";
+      document.getElementById("prof-dog-info").textContent = `${currentUser.dogBreed || 'MIX'} / ${currentUser.dogSize || ''}`;
+      document.getElementById("prof-owner-name").textContent = currentUser.ownerName || "-";
+      document.getElementById("prof-email").textContent = currentUser.email;
+      document.getElementById("prof-fav-count").textContent = `${(currentUser.favorites || []).length} 件`;
+      document.getElementById("profile-modal").classList.remove("hidden");
+    }
+
+    function closeProfileModal() {
+      document.getElementById("profile-modal").classList.add("hidden");
+    }
+
+    function openEditProfile() {
+      const newDog = prompt("愛犬の新しい名前を入力してください:", currentUser.dogName || "");
+      if (newDog && newDog.trim()) {
+        currentUser.dogName = newDog.trim();
+        saveUserData();
+        updateAuthUI(true);
+        openProfileModal();
+        showToast("愛犬の名前を更新しました");
+      }
+    }
+
+    function logoutUser() {
+      localStorage.removeItem('wanlan_current_user');
+      currentUser = null;
+      updateAuthUI(false);
+      closeProfileModal();
+      if (currentTypeFilter === 'fav') setTypeFilter('all');
+      else applyFiltersAndRender();
+      showToast("ログアウトしました");
+    }
+
+    function saveUserData() {
+      if (!currentUser) return;
+      localStorage.setItem('wanlan_current_user', JSON.stringify(currentUser));
+      const users = JSON.parse(localStorage.getItem('wanlan_users') || '[]');
+      const idx = users.findIndex(u => u.email === currentUser.email);
+      if (idx !== -1) {
+        users[idx] = currentUser;
+        localStorage.setItem('wanlan_users', JSON.stringify(users));
+      }
+    }
+
+    function toggleFavorite(id, e) {
+      if (e) e.stopPropagation();
+      if (!currentUser) {
+        showToast("⚠️ お気に入りにはログインが必要です");
+        openAuthModal();
+        return;
+      }
+
+      currentUser.favorites = currentUser.favorites || [];
+      const idx = currentUser.favorites.indexOf(id);
+      if (idx === -1) {
+        currentUser.favorites.push(id);
+        showToast("❤️ お気に入りに追加しました");
+      } else {
+        currentUser.favorites.splice(idx, 1);
+        showToast("🤍 お気に入りを解除しました");
+      }
+
+      saveUserData();
+      updateModalFavButton();
+      applyFiltersAndRender();
+    }
+
+    function toggleModalFav() {
+      if (!currentModalFacilityId) return;
+      toggleFavorite(currentModalFacilityId);
+    }
+
+    function isFavorite(id) {
+      return currentUser && currentUser.favorites && currentUser.favorites.includes(id);
+    }
+
+    function updateModalFavButton() {
+      const btn = document.getElementById("m-fav-btn");
+      if (!btn) return;
+      if (currentModalFacilityId && isFavorite(currentModalFacilityId)) {
+        btn.textContent = "❤️";
+      } else {
+        btn.textContent = "🤍";
+      }
+    }
+
+    function setTypeFilter(type) {
+      if (type === 'fav' && !currentUser) {
+        showToast("⚠️ お気に入りはログインが必要です");
+        openAuthModal();
+        return;
+      }
+
+      currentTypeFilter = type;
+      const tabs = ['all', 'indoor', 'outdoor', 'fav'];
+      tabs.forEach(t => {
+        const el = document.getElementById(`tab-${t}`);
+        el.className = "py-1 rounded text-[11px] font-bold text-center text-slate-600";
+      });
+
+      const active = document.getElementById(`tab-${type}`);
+      if (type === 'all') active.className = "py-1 rounded text-[11px] font-bold text-center bg-white text-slate-800 shadow-xs";
+      if (type === 'indoor') active.className = "py-1 rounded text-[11px] font-bold text-center bg-purple-600 text-white";
+      if (type === 'outdoor') active.className = "py-1 rounded text-[11px] font-bold text-center bg-emerald-600 text-white";
+      if (type === 'fav') active.className = "py-1 rounded text-[11px] font-bold text-center bg-rose-600 text-white";
+
+      applyFiltersAndRender();
+    }
+
+    function applyFiltersAndRender() {
+      let list = allFacilities.map(f => {
+        const d = calcDistance(currentLat, currentLng, f.lat, f.lng);
+        return { ...f, distance: d };
+      });
+
+      if (currentTypeFilter === 'indoor') list = list.filter(f => f.isIndoor);
+      else if (currentTypeFilter === 'outdoor') list = list.filter(f => !f.isIndoor);
+      else if (currentTypeFilter === 'fav') {
+        const favs = currentUser?.favorites || [];
+        list = list.filter(f => favs.includes(f.id));
+      }
+
+      if (currentTypeFilter !== 'fav' && maxDistanceKm < 900) {
+        list = list.filter(f => f.distance <= maxDistanceKm);
+      }
+
+      if (searchQuery.trim() !== "") {
+        const q = searchQuery.toLowerCase().trim();
+        if (q.startsWith("#")) {
+          const tagOnly = q.replace(/^#/, "");
+          list = list.filter(f => f.tags && f.tags.some(t => t.toLowerCase() === tagOnly));
+        } else {
+          list = list.filter(f =>
+            f.name.toLowerCase().includes(q) ||
+            f.address.toLowerCase().includes(q) ||
+            (f.tags && f.tags.some(t => t.toLowerCase().includes(q)))
+          );
+        }
+      }
+
+      const isBadWeather = currentWeather.condition === "rain" || currentWeather.temp >= 30 || currentWeather.pop >= 60;
+      list.sort((a, b) => {
+        if (currentPriority === "dist") return a.distance - b.distance;
+        if (currentPriority === "free") {
+          if (a.isFree !== b.isFree) return a.isFree ? -1 : 1;
+          return a.distance - b.distance;
+        }
+        if (currentPriority === "indoor") {
+          if (a.isIndoor !== b.isIndoor) return a.isIndoor ? -1 : 1;
+          return a.distance - b.distance;
+        }
+        if (currentPriority === "highway") {
+          if (a.isHighway !== b.isHighway) return a.isHighway ? -1 : 1;
+          return a.distance - b.distance;
+        }
+        if (isBadWeather && a.isIndoor !== b.isIndoor) return a.isIndoor ? -1 : 1;
+        return a.distance - b.distance;
+      });
+
+      updateProposalBanner(list);
+      renderMarkers(list);
+      renderList(list);
+    }
+
+    function renderList(items) {
+      const container = document.getElementById("facility-list");
+      const countEl = document.getElementById("result-count");
+      countEl.textContent = `${items.length}件`;
+
+      if (items.length === 0) {
+        container.innerHTML = `
+          <div class="p-8 text-center text-slate-400 text-xs">
+            見つかりませんでした。条件を変更してください。
+          </div>
+        `;
+        return;
+      }
+
+      container.innerHTML = items.map(item => {
+        const fav = isFavorite(item.id);
+        return `
+          <div onclick="openModalById('${item.id}')" class="px-3 py-2.5 hover:bg-amber-50/50 transition cursor-pointer flex justify-between items-center gap-2 active:bg-slate-100">
+            <div class="flex-1 min-w-0 space-y-1">
+              <div class="flex items-center gap-1.5 leading-tight flex-wrap">
+                <span class="font-bold text-xs text-slate-900 truncate">${item.name}</span>
+                ${item.isIndoor ? '<span class="text-[9px] font-bold text-purple-700 bg-purple-50 px-1 py-0.2 rounded flex-shrink-0">室内</span>' : '<span class="text-[9px] font-bold text-emerald-700 bg-emerald-50 px-1 py-0.2 rounded flex-shrink-0">屋外</span>'}
+                ${item.isFree ? '<span class="text-[9px] font-bold text-emerald-700 bg-emerald-50 px-1 py-0.2 rounded flex-shrink-0">無料</span>' : ''}
+                ${item.isHighway ? '<span class="text-[9px] font-bold text-blue-700 bg-blue-50 px-1 py-0.2 rounded flex-shrink-0">高速SA/PA</span>' : ''}
+              </div>
+
+              <div class="flex items-center gap-2 text-[10px] text-slate-500 truncate">
+                <span class="truncate">${item.address}</span>
+                <span class="text-emerald-700 font-medium flex-shrink-0">${item.fee}</span>
+              </div>
+
+              ${item.tags && item.tags.length > 0 ? `
+                <div class="flex flex-wrap gap-1 pt-0.5">
+                  ${item.tags.slice(0, 3).map(t => `
+                    <button onclick="event.stopPropagation(); toggleTagFilter('${t}')" class="text-[9px] bg-slate-100 hover:bg-amber-100 text-slate-600 hover:text-amber-800 px-1.5 py-0.2 rounded transition">
+                      #${t}
+                    </button>
+                  `).join('')}
+                </div>
+              ` : ''}
+            </div>
+
+            <div class="text-right flex-shrink-0 flex items-center gap-2 pl-1">
+              <div class="text-right">
+                <span class="font-bold text-amber-700 text-xs block leading-tight">${item.distance}km</span>
+                <span class="text-[9px] text-slate-400 block leading-tight">詳細 ›</span>
+              </div>
+              <button onclick="toggleFavorite('${item.id}', event)" class="text-base p-1 hover:scale-110 active:scale-95 transition" title="お気に入り">
+                ${fav ? '❤️' : '🤍'}
+              </button>
+            </div>
+          </div>
+        `;
+      }).join('');
+    }
+
+    function renderMarkers(items) {
+      markersLayer.clearLayers();
+      items.forEach(item => {
+        const color = item.isIndoor ? '#9333ea' : (item.isFree ? '#059669' : '#d97706');
+        const markerHtml = `
+          <div style="background-color:${color}; width:22px; height:22px; border-radius:50%; border:2px solid white; display:flex; align-items:center; justify-content:center; box-shadow:0 1px 4px rgba(0,0,0,0.35); font-size:11px; color:white;">
+            ${item.isIndoor ? '🏠' : '🐾'}
+          </div>
+        `;
+        const icon = L.divIcon({ html: markerHtml, className: '', iconSize: [22, 22], iconAnchor: [11, 11] });
+        const marker = L.marker([item.lat, item.lng], { icon: icon }).addTo(markersLayer);
+        marker.on('click', () => {
+          openModal(item);
+          map.panTo([item.lat, item.lng]);
+        });
+      });
+    }
+
+    function openModalById(id) {
+      const item = allFacilities.find(f => f.id === id);
+      if (item) {
+        openModal(item);
+        map.panTo([item.lat, item.lng]);
+      }
+    }
+
+    function openModal(item) {
+      currentModalFacilityId = item.id;
+      const dist = calcDistance(currentLat, currentLng, item.lat, item.lng);
+      document.getElementById("m-name").textContent = item.name;
+      document.getElementById("m-address").textContent = item.address;
+      document.getElementById("m-distance").textContent = `${dist} km`;
+      document.getElementById("m-hours").textContent = item.hours;
+      document.getElementById("m-fee").textContent = item.fee;
+      document.getElementById("m-type").textContent = item.isIndoor ? "🏠 完全室内・雨天対応" : (item.isHighway ? "🚗 高速SA/PA併設" : "🌳 屋外ドッグラン");
+
+      updateModalFavButton();
+      renderModalTags(item.tags || []);
+      document.getElementById("m-nav-btn").href = `https://www.google.com/maps/dir/?api=1&destination=${item.lat},${item.lng}`;
+      document.getElementById("detail-modal").classList.remove("hidden");
+    }
+
+    function closeModal() {
+      document.getElementById("detail-modal").classList.add("hidden");
+      currentModalFacilityId = null;
+    }
+
+    function renderModalTags(tags) {
+      const container = document.getElementById("m-tags");
+      if (!tags || tags.length === 0) {
+        container.innerHTML = `<span class="text-slate-400 text-[10px]">タグなし</span>`;
+        return;
+      }
+      container.innerHTML = tags.map(t => `
+        <button onclick="closeModal(); toggleTagFilter('${t}')" class="text-[10px] bg-white text-slate-700 border border-slate-300 hover:border-amber-500 hover:text-amber-800 px-1.5 py-0.2 rounded font-medium transition">
+          #${t}
+        </button>
+      `).join('');
+    }
+
+    function addTagToCurrentFacility() {
+      const input = document.getElementById("input-new-tag");
+      const val = input.value.trim().replace(/^#/, "");
+      if (!val) return;
+
+      const facility = allFacilities.find(f => f.id === currentModalFacilityId);
+      if (!facility) return;
+
+      facility.tags = facility.tags || [];
+      if (!facility.tags.includes(val)) {
+        facility.tags.push(val);
+        const savedTagsMap = JSON.parse(localStorage.getItem('wanlan_facility_tags') || '{}');
+        savedTagsMap[facility.id] = facility.tags;
+        localStorage.setItem('wanlan_facility_tags', JSON.stringify(savedTagsMap));
+
+        renderModalTags(facility.tags);
+        renderTagPills();
+        applyFiltersAndRender();
+        showToast(`🏷️ タグ「#${val}」を追加しました`);
+      }
+      input.value = "";
+    }
+
+    function openAddModal() { document.getElementById("add-modal").classList.remove("hidden"); }
+    function closeAddModal() { document.getElementById("add-modal").classList.add("hidden"); }
+
+    function submitNewFacility() {
+      const name = document.getElementById("add-name").value.trim();
+      if (!name) { alert("施設名を入力してください"); return; }
+
+      const type = document.getElementById("add-type").value;
+      const isFree = document.getElementById("add-free").value === "true";
+      const address = document.getElementById("add-address").value.trim() || "所在地未設定";
+      const hours = document.getElementById("add-hours").value.trim() || "要確認";
+      const fee = document.getElementById("add-fee").value.trim() || (isFree ? "無料" : "有料");
+      const tagsRaw = document.getElementById("add-tags").value.trim();
+      let tags = tagsRaw ? tagsRaw.split(/[,、\s]+/).filter(Boolean) : [];
+      if (type === "indoor" && !tags.includes("室内")) tags.unshift("室内");
+
+      const newFacility = {
+        id: `custom-${Date.now()}`,
+        name,
+        lat: currentLat + (Math.random() - 0.5) * 0.01,
+        lng: currentLng + (Math.random() - 0.5) * 0.01,
+        isIndoor: type === "indoor",
+        isFree,
+        isHighway: false,
+        hours,
+        fee,
+        address,
+        tags
+      };
+
+      const savedCustom = JSON.parse(localStorage.getItem('wanlan_custom_facilities') || '[]');
+      savedCustom.unshift(newFacility);
+      localStorage.setItem('wanlan_custom_facilities', JSON.stringify(savedCustom));
+
+      allFacilities.unshift(newFacility);
+      closeAddModal();
+      renderTagPills();
+      applyFiltersAndRender();
+      showToast(`🐾 「${name}」を登録しました`);
+    }
+
+    function updateProposalBanner(list) {
+      const banner = document.getElementById("proposal-banner");
+      const icon = document.getElementById("proposal-icon");
+      const title = document.getElementById("proposal-title");
+      const desc = document.getElementById("proposal-desc");
+
+      if (list.length === 0) {
+        banner.className = "px-3 py-1 bg-slate-100 border-b border-slate-300 flex items-center gap-2 text-xs text-slate-700 flex-shrink-0 z-20";
+        icon.textContent = "📍";
+        title.textContent = `${maxDistanceKm}km以内に該当施設がありません`;
+        desc.textContent = "条件や範囲を変更してみてください。";
+        return;
+      }
+
+      const top = list[0];
+      const isBadWeather = currentWeather.condition === "rain" || currentWeather.temp >= 30;
+      banner.className = "px-3 py-1 bg-amber-50 border-b border-amber-200 flex items-center gap-2 text-xs text-amber-900 flex-shrink-0 z-20";
+
+      if (isBadWeather && top.isIndoor) {
+        icon.textContent = "🏠";
+        title.textContent = `おすすめ: ${top.name} (${top.distance}km)`;
+        desc.textContent = "雨・猛暑に対応できる室内ドッグランです。";
+      } else {
+        icon.textContent = "🐾";
+        title.textContent = `おすすめ: ${top.name} (${top.distance}km)`;
+        desc.textContent = `現在地からアクセスしやすい人気スポットです。`;
+      }
+    }
+
+    async function fetchWeatherData(areaCode) {
+      try {
+        const res = await fetch(`https://www.jma.go.jp/bosai/forecast/data/forecast/${areaCode}.json`);
+        if (!res.ok) throw new Error("JMA error");
+        const data = await res.json();
+        const weatherText = data[0]?.timeSeries[0]?.areas[0]?.weathers?.[0] || "晴れ";
+        const popValue = parseInt(data[0]?.timeSeries[1]?.areas[0]?.pops?.[0] || "10", 10);
+        let tempValue = 22;
+        const temps = data[0]?.timeSeries[2]?.areas[0]?.temps;
+        if (temps && temps.length > 0) tempValue = parseInt(temps[temps.length - 1], 10) || 22;
+
+        let condition = "clear";
+        if (weatherText.includes("雨")) condition = "rain";
+        else if (weatherText.includes("曇")) condition = "cloudy";
+
+        currentWeather = { condition, temp: tempValue, pop: popValue, text: weatherText };
+        if (weatherMode === "auto") applyWeatherUI();
+      } catch (e) {
+        currentWeather = { condition: "clear", temp: 22, pop: 10, text: "晴れ" };
+        if (weatherMode === "auto") applyWeatherUI();
+      }
+    }
+
+    function applyWeatherUI() {
+      document.getElementById("weather-status").textContent = currentWeather.text;
+      document.getElementById("banner-temp").textContent = `${currentWeather.temp}℃`;
+      document.getElementById("banner-pop").textContent = `${currentWeather.pop}%`;
+
+      const weatherIcon = document.getElementById("weather-icon");
+      if (currentWeather.condition === "rain") weatherIcon.textContent = "🌧️";
+      else if (currentWeather.condition === "cloudy") weatherIcon.textContent = "☁️";
+      else weatherIcon.textContent = "☀️";
+
+      let pavementTemp = currentWeather.temp;
+      if (currentWeather.condition === "clear") pavementTemp = Math.round(currentWeather.temp * 1.35 + 5);
+      else if (currentWeather.condition === "cloudy") pavementTemp = Math.round(currentWeather.temp * 1.1 + 2);
+
+      document.getElementById("pavement-status").textContent = `路面推定: 約${pavementTemp}℃`;
+      const heatBadge = document.getElementById("heat-badge");
+      if (pavementTemp >= 45 || currentWeather.temp >= 33) {
+        heatBadge.textContent = "⚠️ 猛暑";
+        heatBadge.className = "px-1.5 py-0.2 rounded font-bold text-[9px] bg-red-600 text-white animate-pulse";
+      } else {
+        heatBadge.textContent = "安全";
+        heatBadge.className = "px-1.5 py-0.2 rounded font-bold text-[9px] bg-emerald-600 text-white";
+      }
+      applyFiltersAndRender();
+    }
+
+    async function fetchOnlineFacilities(lat, lng) {
+      const spinner = document.getElementById("loading-spinner");
+      const badge = document.getElementById("data-source-badge");
+      spinner.classList.remove("hidden");
+
+      const query = `[out:json][timeout:8];
+(
+  node["leisure"="dog_park"](around:40000, ${lat}, ${lng});
+  way["leisure"="dog_park"](around:40000, ${lat}, ${lng});
+  node["amenity"="dog_cafe"](around:40000, ${lat}, ${lng});
+  way["amenity"="dog_cafe"](around:40000, ${lat}, ${lng});
+  node["name"~"ドッグラン|ドッグパーク|室内ラン|インドアラン"](around:40000, ${lat}, ${lng});
+  way["name"~"ドッグラン|ドッグパーク|室内ラン|インドアラン"](around:40000, ${lat}, ${lng});
+);
+out center 50;`;
+
+      try {
+        const res = await fetch("https://overpass-api.de/api/interpreter", {
+          method: 'POST',
+          body: 'data=' + encodeURIComponent(query),
+          headers: { 'Content-Type': 'application/x-www-form-urlencoded;charset=UTF-8' }
+        });
+
+        if (res.ok) {
+          const data = await res.json();
+          if (data && data.elements && data.elements.length > 0) {
+            const osmItems = data.elements.map((el, i) => {
+              const itemLat = el.lat || (el.center && el.center.lat);
+              const itemLng = el.lon || (el.center && el.center.lon);
+              const tags = el.tags || {};
+              let name = tags.name || tags["name:ja"] || `ドッグラン施設 #${i+1}`;
+              
+              const isIndoor = tags.covered === 'yes' || 
+                               tags.indoor === 'yes' || 
+                               tags.building !== undefined || 
+                               tags.amenity === 'dog_cafe' ||
+                               /室内|インドア|屋内|全天候|雨天|ビル|階|F/i.test(name) ||
+                               /室内|インドア|屋内/.test(tags.description || "");
+
+              const isFree = tags.fee === 'no' || (!tags.fee && !tags.charge);
+
+              const tagsList = [];
+              if (isIndoor) tagsList.push("室内");
+              else tagsList.push("屋外");
+              if (tags.amenity === 'dog_cafe') tagsList.push("カフェ併設");
+              if (/大型犬/.test(name) || /大型犬/.test(tags.description || "")) tagsList.push("大型犬OK");
+
+              return {
+                id: `osm-${el.id}`,
+                name,
+                lat: itemLat,
+                lng: itemLng,
+                isIndoor,
+                isFree,
+                isHighway: /SA|PA/.test(name),
+                hours: tags.opening_hours || "要確認",
+                fee: isFree ? "無料" : "有料",
+                address: tags["addr:full"] || tags["addr:city"] ? `${tags["addr:city"]||""}${tags["addr:street"]||""}` : "周辺施設",
+                tags: tagsList
+              };
+            }).filter(item => item.lat && item.lng);
+
+            osmItems.forEach(item => {
+              if (!allFacilities.some(m => Math.abs(m.lat - item.lat) < 0.003 && Math.abs(m.lng - item.lng) < 0.003)) {
+                allFacilities.push(item);
+              }
+            });
+
+            badge.textContent = `オンライン (+${osmItems.length})`;
+            badge.className = "bg-emerald-100 text-emerald-800 px-1 py-0.2 rounded text-[9px] font-semibold";
+            renderTagPills();
+          }
+        }
+      } catch (e) {
+        // オフライン・エラー時はビルトインデータを使用
+      }
+
+      spinner.classList.add("hidden");
+      applyFiltersAndRender();
+    }
+
+    function refreshFacilities(lat, lng) {
+      showToast("周辺データを再検索中...");
+      fetchOnlineFacilities(lat, lng);
+    }
+
+    function changeRegion(val) {
+      const [areaCode, latStr, lngStr] = val.split(",");
+      currentAreaCode = areaCode;
+      currentLat = parseFloat(latStr);
+      currentLng = parseFloat(lngStr);
+      map.setView([currentLat, currentLng], 12);
+      setTimeout(() => map.invalidateSize(), 200);
+      updateUserLocationMarker(currentLat, currentLng);
+      applyFiltersAndRender();
+      fetchWeatherData(currentAreaCode);
+      fetchOnlineFacilities(currentLat, currentLng);
+    }
+
+    function getUserLocation() {
+      if (!navigator.geolocation) {
+        showToast("位置情報機能が非対応です");
+        return;
+      }
+      navigator.geolocation.getCurrentPosition(
+        (pos) => {
+          currentLat = pos.coords.latitude;
+          currentLng = pos.coords.longitude;
+          map.setView([currentLat, currentLng], 13);
+          setTimeout(() => map.invalidateSize(), 200);
+          updateUserLocationMarker(currentLat, currentLng);
+          applyFiltersAndRender();
+          fetchOnlineFacilities(currentLat, currentLng);
+          showToast("現在地周辺を探索しました");
+        },
+        () => showToast("現在地を取得できませんでした")
+      );
+    }
+
+    function setDistanceFilter(val) { maxDistanceKm = parseFloat(val); applyFiltersAndRender(); }
+    function setPrioritySort(val) { currentPriority = val; applyFiltersAndRender(); }
+
+    function handleSearchInput(val) {
+      searchQuery = val;
+      if (!val.startsWith("#")) activeTag = null;
+      document.getElementById("clear-search-btn").classList.toggle("hidden", val.length === 0);
+      renderTagPills();
+      applyFiltersAndRender();
+    }
+
+    function clearSearch() {
+      document.getElementById("search-input").value = "";
+      searchQuery = "";
+      activeTag = null;
+      document.getElementById("clear-search-btn").classList.add("hidden");
+      renderTagPills();
+      applyFiltersAndRender();
+    }
+
+    function toggleCustomWeatherPanel() {
+      const p = document.getElementById("custom-weather-panel");
+      p.classList.toggle("hidden");
+      document.getElementById("btn-toggle-custom").textContent = p.classList.contains("hidden") ? "手動変更 ▼" : "閉じる ▲";
+    }
+
+    function setWeatherMode(m) {
+      weatherMode = m;
+      const btnAuto = document.getElementById("mode-auto");
+      const btnCustom = document.getElementById("mode-custom");
+      const controls = document.getElementById("custom-controls");
+
+      if (m === 'auto') {
+        btnAuto.className = "px-2.5 py-0.5 rounded font-bold bg-amber-600 text-white text-[10px] transition";
+        btnCustom.className = "px-2.5 py-0.5 rounded bg-slate-100 border border-slate-300 text-slate-700 text-[10px] transition";
+        controls.classList.add("opacity-40", "pointer-events-none");
+        fetchWeatherData(currentAreaCode);
+      } else {
+        btnCustom.className = "px-2.5 py-0.5 rounded font-bold bg-amber-600 text-white text-[10px] transition";
+        btnAuto.className = "px-2.5 py-0.5 rounded bg-slate-100 border border-slate-300 text-slate-700 text-[10px] transition";
+        controls.classList.remove("opacity-40", "pointer-events-none");
+        applyWeatherUI();
+      }
+    }
+
+    function setCustomCondition(c) {
+      currentWeather.condition = c;
+      currentWeather.text = c === "clear" ? "晴れ" : (c === "rain" ? "雨" : "曇り");
+
+      ['clear', 'rain', 'cloudy'].forEach(cond => {
+        const btn = document.getElementById(`btn-cond-${cond}`);
+        if (cond === c) {
+          btn.className = "weather-cond-btn px-2.5 py-0.5 rounded border text-[10px] bg-amber-500 text-white border-amber-600 font-bold transition";
+        } else {
+          btn.className = "weather-cond-btn px-2.5 py-0.5 rounded border text-[10px] bg-white border-slate-300 text-slate-700 transition";
+        }
+      });
+
+      applyWeatherUI();
+    }
+
+    function updateCustomValues() {
+      currentWeather.temp = parseInt(document.getElementById("input-temp").value, 10);
+      currentWeather.pop = parseInt(document.getElementById("input-pop").value, 10);
+      document.getElementById("val-temp").textContent = `${currentWeather.temp}℃`;
+      document.getElementById("val-pop").textContent = `${currentWeather.pop}%`;
+      applyWeatherUI();
+    }
+
+    function showToast(msg) {
+      const container = document.getElementById("toast-container");
+      const toast = document.createElement("div");
+      toast.className = "toast-anim bg-slate-800 text-white text-[11px] px-3 py-1.5 rounded-lg shadow-lg border border-slate-700 flex items-center gap-1.5 pointer-events-auto";
+      toast.innerHTML = `<span>🐾</span> <span>${msg}</span>`;
+      container.appendChild(toast);
+      setTimeout(() => toast.remove(), 3000);
+    }
+  </script>
+</body>
+</html>
